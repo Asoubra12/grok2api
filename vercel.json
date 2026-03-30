@@ -1,15 +1,21 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
-  "framework": "fastapi",
+  "builds": [
+    {
+      "src": "main.py",
+      "use": "@vercel/python",
+      "config": {
+        "includeFiles": ["app/**"]
+      }
+    }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "main.py" }
+  ],
   "env": {
     "LOG_LEVEL": "INFO",
     "LOG_FILE_ENABLED": "false",
     "DATA_DIR": "/tmp/data"
-  },
-  "functions": {
-    "api/index.py": {
-      "includeFiles": "app/static/**"
-    }
   }
 }
