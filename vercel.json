@@ -6,5 +6,10 @@
     "LOG_LEVEL": "INFO",
     "LOG_FILE_ENABLED": "false",
     "DATA_DIR": "/tmp/data"
+  },
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "app/static/**"
+    }
   }
 }
