@@ -18,6 +18,7 @@ from app.core.config import get_config
 from app.core.logger import logger
 from app.core.storage import DATA_DIR
 from app.core.exceptions import AppException, ErrorType, UpstreamException
+from app.services.grok.utils.blur_detect import is_blurry_blob
 from app.services.grok.utils.process import BaseProcessor
 from app.services.grok.utils.retry import pick_token, rate_limited
 from app.services.grok.utils.stream import wrap_stream_with_usage
@@ -309,6 +310,7 @@ class ImageGenerationService:
             added_in_round = 0
             filtered_png = 0
 
+            filtered_blur = 0
             for batch in results:
                 if isinstance(batch, Exception):
                     logger.warning(f"WS batch failed: {batch}")
@@ -316,6 +318,10 @@ class ImageGenerationService:
                 for img in batch:
                     if self._is_blocked_png_image(img):
                         filtered_png += 1
+                        continue
+                    blurry, variance = is_blurry_blob(img)
+                    if blurry:
+                        filtered_blur += 1
                         continue
                     if img not in seen:
                         seen.add(img)
@@ -330,7 +336,8 @@ class ImageGenerationService:
                 "WS collect round: "
                 f"{round_idx}/{max_collect_rounds}, "
                 f"target={n}, collected={len(all_images)}, "
-                f"added={added_in_round}, filtered_png={filtered_png}"
+                f"added={added_in_round}, filtered_png={filtered_png}, "
+                f"filtered_blur={filtered_blur}"
             )
 
             if len(all_images) >= n:
@@ -641,10 +648,18 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
             ]
 
         for image_id, item in selected:
+            blob = item.get("blob", "")
+            blurry, variance = is_blurry_blob(blob)
+            if blurry:
+                logger.warning(
+                    f"Stream image skipped (blurry): image_id={image_id}, variance={variance:.2f}"
+                )
+                continue
+
             if self.response_format == "url":
                 output = await self._save_blob(
                     f"{image_id}-final",
-                    item.get("blob", ""),
+                    blob,
                     item.get("is_final", False),
                     ext=item.get("ext"),
                 )

@@ -128,6 +128,10 @@ nsfw = true
 medium_min_bytes = 30000
 # 判定为最终图的最小字节数
 final_min_bytes = 100000
+# Laplacian 模糊检测阈值（方差低于此值视为模糊），0 = 禁用
+blur_threshold = 0
+# 模糊检测日志（启用后即使不拒绝也会记录方差值）
+blur_log = true
 
 # ==================== 视频配置 ====================
 [video]
