@@ -61,7 +61,7 @@ async def _gen_one(session, grok_url, api_key, prompt):
         return {"error": {"message": str(e)}}
 
 
-async def _measure(session, url):
+async def _measure(session, url, save_path=None):
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             if resp.status != 200:
@@ -74,6 +74,13 @@ async def _measure(session, url):
                     w, h = img.size
             except Exception:
                 pass
+            if save_path and len(data) > 0:
+                try:
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(save_path, "wb") as f:
+                        f.write(data)
+                except Exception as e:
+                    logger.warning(f"Geo-test save failed: {e}")
             return len(data), w, h
     except Exception:
         return 0, 0, 0
@@ -129,6 +136,11 @@ async def run_geo_test(data: dict = None):
         raise HTTPException(status_code=400, detail="Missing: " + ", ".join(errs))
 
     async def stream():
+        from pathlib import Path
+        from app.core.storage import DATA_DIR
+        run_dir = DATA_DIR / "geo_test" / time.strftime("%Y%m%d_%H%M%S")
+        run_dir.mkdir(parents=True, exist_ok=True)
+
         all_results: List[Dict[str, Any]] = []
         t0 = time.time()
         total = len(countries)
@@ -188,11 +200,15 @@ async def run_geo_test(data: dict = None):
                                     "status": "no_url"})
                         continue
 
-                    fsize, w, h = await _measure(session, img_url)
-                    images.append({"status": "ok", "size": fsize, "width": w, "height": h})
-                    passed = "PASS" if fsize > min_size else "SMALL"
+                    save_path = run_dir / cc / f"{cc}_{img_i + 1}.jpg"
+                    fsize, w, h = await _measure(session, img_url, save_path=save_path)
+                    is_pass = fsize > min_size
+                    verdict = "PASS" if is_pass else "SMALL"
+                    saved = str(save_path) if is_pass and save_path.exists() else ""
+                    images.append({"status": "ok", "size": fsize, "width": w, "height": h, "saved": saved})
                     yield _sse({"type": "image_done", "country": cc, "image": img_i + 1, "of": n_img,
-                                "status": "ok", "size": fsize, "width": w, "height": h, "verdict": passed})
+                                "status": "ok", "size": fsize, "width": w, "height": h,
+                                "verdict": verdict, "saved": bool(saved)})
 
                     await asyncio.sleep(0.3)
 
@@ -212,14 +228,26 @@ async def run_geo_test(data: dict = None):
 
         ranked = sorted(all_results, key=lambda x: (-x.get("score", 0), -x.get("avg_size", 0)))
         passed_count = sum(1 for r in all_results if r.get("pass"))
-        yield _sse({"type": "done", "result": {
+
+        final = {
             "status": "success",
             "duration_sec": round(time.time() - t0, 1),
+            "output_dir": str(run_dir),
             "summary": {"total_countries": len(all_results), "passed": passed_count,
                         "failed": len(all_results) - passed_count,
                         "pass_threshold": pass_thr, "images_per_country": n_img},
             "ranked": ranked,
-        }})
+        }
+
+        # Save results.json
+        try:
+            with open(run_dir / "results.json", "w") as f:
+                f.write(orjson.dumps(final, option=orjson.OPT_INDENT_2).decode())
+            logger.info(f"Geo-test results saved to {run_dir}/results.json")
+        except Exception as e:
+            logger.warning(f"Geo-test results save failed: {e}")
+
+        yield _sse({"type": "done", "result": final})
 
     headers = {
         "Cache-Control": "no-cache, no-store",
