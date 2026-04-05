@@ -9,6 +9,24 @@ function formatBytes(bytes) {
   return (bytes / 1024).toFixed(1) + ' KB';
 }
 
+function buildGeoPayload() {
+  const countriesRaw = byId('cfg-countries').value.trim();
+  const countries = countriesRaw
+    ? countriesRaw.split(',').map(c => c.trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  return {
+    geo_test: {
+      proxy_api_key: byId('cfg-proxy-api-key').value.trim(),
+      proxy_sub_user_id: parseInt(byId('cfg-proxy-sub-user-id').value) || 0,
+      prompt: byId('cfg-prompt').value.trim(),
+      images_per_country: parseInt(byId('cfg-images-per-country').value) || 4,
+      pass_threshold: parseInt(byId('cfg-pass-threshold').value) || 2,
+      countries: countries,
+    }
+  };
+}
+
 /* ---------- Config load / save ---------- */
 
 async function loadConfig() {
@@ -33,23 +51,9 @@ async function loadConfig() {
 
 async function saveConfig() {
   const apiKey = await ensureAdminKey();
-  if (!apiKey) return;
+  if (!apiKey) return false;
 
-  const countriesRaw = byId('cfg-countries').value.trim();
-  const countries = countriesRaw
-    ? countriesRaw.split(',').map(c => c.trim().toLowerCase()).filter(Boolean)
-    : [];
-
-  const payload = {
-    geo_test: {
-      proxy_api_key: byId('cfg-proxy-api-key').value.trim(),
-      proxy_sub_user_id: parseInt(byId('cfg-proxy-sub-user-id').value) || 0,
-      prompt: byId('cfg-prompt').value.trim(),
-      images_per_country: parseInt(byId('cfg-images-per-country').value) || 4,
-      pass_threshold: parseInt(byId('cfg-pass-threshold').value) || 2,
-      countries: countries,
-    }
-  };
+  const payload = buildGeoPayload();
 
   try {
     const res = await fetch('/v1/admin/config', {
@@ -59,11 +63,15 @@ async function saveConfig() {
     });
     if (res.ok) {
       showToast('Config saved', 'success');
+      return true;
     } else {
-      showToast('Failed to save config', 'error');
+      const err = await res.text();
+      showToast('Failed to save config: ' + err, 'error');
+      return false;
     }
   } catch (e) {
-    showToast('Error: ' + e.message, 'error');
+    showToast('Error saving config: ' + e.message, 'error');
+    return false;
   }
 }
 
@@ -73,8 +81,25 @@ async function startTest() {
   const apiKey = await ensureAdminKey();
   if (!apiKey) return;
 
-  // Save config first
-  await saveConfig();
+  // Client-side validation
+  const payload = buildGeoPayload();
+  const gt = payload.geo_test;
+  if (!gt.prompt) {
+    showToast('Please enter a test prompt', 'error');
+    return;
+  }
+  if (!gt.proxy_api_key) {
+    showToast('Please enter the proxy API key', 'error');
+    return;
+  }
+  if (!gt.proxy_sub_user_id) {
+    showToast('Please enter the proxy sub-user ID', 'error');
+    return;
+  }
+  if (!gt.countries || gt.countries.length === 0) {
+    showToast('Please enter at least one country code', 'error');
+    return;
+  }
 
   // Reset UI
   byId('progress-panel').classList.remove('hidden');
@@ -91,13 +116,25 @@ async function startTest() {
   byId('btn-cancel').classList.remove('hidden');
 
   try {
+    // Send config in the request body so the server saves + uses it atomically
     const res = await fetch('/v1/admin/geo-test/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(apiKey) },
+      body: JSON.stringify(payload),
     });
-    const data = await res.json();
+
+    let data;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      const text = await res.text().catch(() => '');
+      showToast('Server error (' + res.status + '): ' + (text || 'invalid response'), 'error');
+      resetButtons();
+      return;
+    }
+
     if (!res.ok || !data.task_id) {
-      showToast(data.detail || 'Failed to start test', 'error');
+      showToast(data.detail || data.error || ('Server error: HTTP ' + res.status), 'error');
       resetButtons();
       return;
     }
@@ -106,7 +143,7 @@ async function startTest() {
     byId('progress-total').textContent = data.total;
     connectSSE(data.task_id);
   } catch (e) {
-    showToast('Error: ' + e.message, 'error');
+    showToast('Network error: ' + e.message, 'error');
     resetButtons();
   }
 }
@@ -127,10 +164,6 @@ async function cancelTest() {
 
 function connectSSE(taskId) {
   if (eventSource) eventSource.close();
-
-  const appKeyRaw = byId('cfg-proxy-api-key')
-    ? localStorage.getItem('grok2api_app_key')
-    : '';
 
   // Get raw app_key for SSE query param
   getStoredAppKey().then(key => {
