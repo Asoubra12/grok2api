@@ -14,17 +14,37 @@ router = APIRouter()
 
 
 @router.post("/geo-test/run", dependencies=[Depends(verify_app_key)])
-async def run_geo_test_async():
-    """Launch a geo-moderation test (async + SSE progress)."""
-    from app.core.config import get_config
+async def run_geo_test_async(data: dict = None):
+    """Launch a geo-moderation test (async + SSE progress).
+
+    Accepts optional overrides in request body that take precedence
+    over the stored config, so the test always uses what's on screen.
+    """
+    from app.core.config import config, get_config
+
+    # Merge body overrides into stored config first
+    overrides = data or {}
+    if overrides:
+        try:
+            await config.update(overrides)
+        except Exception as e:
+            logger.warning(f"Geo-test config save failed: {e}")
 
     countries = get_config("geo_test.countries") or []
     if not countries:
-        raise HTTPException(status_code=400, detail="geo_test.countries is empty")
+        raise HTTPException(status_code=400, detail="geo_test.countries is empty — configure countries first")
 
     prompt = str(get_config("geo_test.prompt") or "").strip()
     if not prompt:
-        raise HTTPException(status_code=400, detail="geo_test.prompt is not configured")
+        raise HTTPException(status_code=400, detail="geo_test.prompt is empty — enter a test prompt first")
+
+    proxy_api_key = str(get_config("geo_test.proxy_api_key") or "").strip()
+    if not proxy_api_key:
+        raise HTTPException(status_code=400, detail="geo_test.proxy_api_key is empty — configure your proxy API key")
+
+    proxy_sub_user_id = int(get_config("geo_test.proxy_sub_user_id") or 0)
+    if not proxy_sub_user_id:
+        raise HTTPException(status_code=400, detail="geo_test.proxy_sub_user_id is not set — configure your proxy sub-user ID")
 
     task = create_task(len(countries))
 
