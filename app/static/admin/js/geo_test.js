@@ -1,5 +1,4 @@
-let currentTaskId = null;
-let eventSource = null;
+let abortController = null;
 
 const byId = (id) => document.getElementById(id);
 
@@ -52,9 +51,7 @@ async function loadConfig() {
 async function saveConfig() {
   const apiKey = await ensureAdminKey();
   if (!apiKey) return false;
-
   const payload = buildGeoPayload();
-
   try {
     const res = await fetch('/v1/admin/config', {
       method: 'POST',
@@ -66,11 +63,11 @@ async function saveConfig() {
       return true;
     } else {
       const err = await res.text();
-      showToast('Failed to save config: ' + err, 'error');
+      showToast('Failed to save: ' + err, 'error');
       return false;
     }
   } catch (e) {
-    showToast('Error saving config: ' + e.message, 'error');
+    showToast('Save error: ' + e.message, 'error');
     return false;
   }
 }
@@ -81,25 +78,12 @@ async function startTest() {
   const apiKey = await ensureAdminKey();
   if (!apiKey) return;
 
-  // Client-side validation
   const payload = buildGeoPayload();
   const gt = payload.geo_test;
-  if (!gt.prompt) {
-    showToast('Please enter a test prompt', 'error');
-    return;
-  }
-  if (!gt.proxy_api_key) {
-    showToast('Please enter the proxy API key', 'error');
-    return;
-  }
-  if (!gt.proxy_sub_user_id) {
-    showToast('Please enter the proxy sub-user ID', 'error');
-    return;
-  }
-  if (!gt.countries || gt.countries.length === 0) {
-    showToast('Please enter at least one country code', 'error');
-    return;
-  }
+  if (!gt.prompt) { showToast('Enter a test prompt', 'error'); return; }
+  if (!gt.proxy_api_key) { showToast('Enter the proxy API key', 'error'); return; }
+  if (!gt.proxy_sub_user_id) { showToast('Enter the proxy sub-user ID', 'error'); return; }
+  if (!gt.countries || !gt.countries.length) { showToast('Enter at least one country', 'error'); return; }
 
   // Reset UI
   byId('progress-panel').classList.remove('hidden');
@@ -109,102 +93,100 @@ async function startTest() {
   byId('live-feed').innerHTML = '';
   byId('progress-bar').style.width = '0%';
   byId('progress-processed').textContent = '0';
+  byId('progress-total').textContent = gt.countries.length;
   byId('progress-ok').textContent = '0';
   byId('progress-fail').textContent = '0';
   byId('btn-run').disabled = true;
   byId('btn-run').classList.add('opacity-50');
   byId('btn-cancel').classList.remove('hidden');
 
+  abortController = new AbortController();
+
   try {
-    // Send config in the request body so the server saves + uses it atomically
     const res = await fetch('/v1/admin/geo-test/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(apiKey) },
       body: JSON.stringify(payload),
+      signal: abortController.signal,
     });
 
-    let data;
-    try {
-      data = await res.json();
-    } catch (parseErr) {
-      const text = await res.text().catch(() => '');
-      showToast('Server error (' + res.status + '): ' + (text || 'invalid response'), 'error');
+    if (!res.ok) {
+      let detail = 'HTTP ' + res.status;
+      try { const j = await res.json(); detail = j.detail || detail; } catch (_) {}
+      showToast('Error: ' + detail, 'error');
       resetButtons();
       return;
     }
 
-    if (!res.ok || !data.task_id) {
-      showToast(data.detail || data.error || ('Server error: HTTP ' + res.status), 'error');
-      resetButtons();
-      return;
+    // Read SSE from the streaming POST response body
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+          handleEvent(event);
+        } catch (e) {
+          console.warn('SSE parse error:', e, line);
+        }
+      }
     }
 
-    currentTaskId = data.task_id;
-    byId('progress-total').textContent = data.total;
-    connectSSE(data.task_id);
+    // Process any remaining buffer
+    if (buffer.startsWith('data: ')) {
+      try {
+        const event = JSON.parse(buffer.slice(6));
+        handleEvent(event);
+      } catch (_) {}
+    }
+
+    resetButtons();
   } catch (e) {
-    showToast('Network error: ' + e.message, 'error');
+    if (e.name === 'AbortError') {
+      showToast('Test cancelled', 'warning');
+    } else {
+      showToast('Error: ' + e.message, 'error');
+    }
     resetButtons();
   }
 }
 
-async function cancelTest() {
-  if (!currentTaskId) return;
-  const apiKey = await ensureAdminKey();
-  if (!apiKey) return;
-  try {
-    await fetch(`/v1/admin/geo-test/${currentTaskId}/cancel`, {
-      method: 'POST',
-      headers: buildAuthHeaders(apiKey),
-    });
-  } catch (e) {
-    console.error('Cancel failed:', e);
+function cancelTest() {
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
   }
 }
 
-function connectSSE(taskId) {
-  if (eventSource) eventSource.close();
-
-  // Get raw app_key for SSE query param
-  getStoredAppKey().then(key => {
-    const url = `/v1/admin/geo-test/${taskId}/stream?app_key=${encodeURIComponent(key)}`;
-    eventSource = new EventSource(url);
-
-    eventSource.onmessage = (e) => {
-      try {
-        const event = JSON.parse(e.data);
-        handleEvent(event);
-      } catch (err) {
-        console.error('SSE parse error:', err);
-      }
-    };
-
-    eventSource.onerror = () => {
-      eventSource.close();
-      eventSource = null;
-      resetButtons();
-    };
-  });
-}
+/* ---------- Event handling ---------- */
 
 function handleEvent(event) {
   const type = event.type;
 
-  if (type === 'snapshot' || type === 'progress') {
+  if (type === 'started') {
+    byId('progress-total').textContent = event.total || 0;
+  }
+
+  if (type === 'progress') {
     const processed = event.processed || 0;
     const total = event.total || 1;
-    const ok = event.ok || 0;
-    const fail = event.fail || 0;
-    const pct = Math.round((processed / total) * 100);
-
-    byId('progress-bar').style.width = pct + '%';
+    byId('progress-bar').style.width = Math.round((processed / total) * 100) + '%';
     byId('progress-processed').textContent = processed;
     byId('progress-total').textContent = total;
-    byId('progress-ok').textContent = ok;
-    byId('progress-fail').textContent = fail;
+    byId('progress-ok').textContent = event.ok || 0;
+    byId('progress-fail').textContent = event.fail || 0;
 
-    // Live feed entry
-    if (type === 'progress' && event.detail) {
+    if (event.detail) {
       const d = event.detail;
       const cc = (d.country || '').toUpperCase();
       const isPass = d.pass;
@@ -212,28 +194,14 @@ function handleEvent(event) {
       const icon = isPass ? 'PASS' : (d.status === 'NO_PROXY' ? 'SKIP' : 'FAIL');
       const line = document.createElement('div');
       line.className = `feed-line ${cls}`;
-      line.textContent = `[${cc}] ${icon} - score=${d.score}, pass_images=${d.pass_count}/${d.total}, avg=${formatBytes(d.avg_size)}`;
+      line.textContent = `[${cc}] ${icon} — score=${d.score}, pass_images=${d.pass_count}/${d.total}, avg=${formatBytes(d.avg_size)}`;
       byId('live-feed').appendChild(line);
       byId('live-feed').scrollTop = byId('live-feed').scrollHeight;
     }
   }
 
   if (type === 'done') {
-    if (eventSource) { eventSource.close(); eventSource = null; }
-    resetButtons();
     renderResults(event.result);
-  }
-
-  if (type === 'error') {
-    if (eventSource) { eventSource.close(); eventSource = null; }
-    resetButtons();
-    showToast('Test failed: ' + (event.error || 'unknown'), 'error');
-  }
-
-  if (type === 'cancelled') {
-    if (eventSource) { eventSource.close(); eventSource = null; }
-    resetButtons();
-    showToast('Test cancelled', 'warning');
   }
 }
 
@@ -242,36 +210,26 @@ function renderResults(result) {
   const summary = result.summary || {};
   const ranked = result.ranked || [];
 
-  // Summary
   byId('summary-panel').classList.remove('hidden');
   byId('sum-total').textContent = summary.total_countries || 0;
   byId('sum-passed').textContent = summary.passed || 0;
   byId('sum-failed').textContent = summary.failed || 0;
   byId('sum-duration').textContent = (result.duration_sec || 0) + 's';
 
-  // Table
   byId('results-panel').classList.remove('hidden');
   const tbody = byId('results-body');
   tbody.innerHTML = '';
 
   ranked.forEach((r, i) => {
     const cc = (r.country || '').toUpperCase();
-    const isPass = r.pass;
     const passCount = r.pass_count || 0;
     const total = r.total || 0;
     const okCount = r.ok_count || 0;
 
     let resultClass, resultText;
-    if (r.status === 'NO_PROXY') {
-      resultClass = 'result-skip';
-      resultText = 'NO PROXY';
-    } else if (isPass) {
-      resultClass = 'result-pass';
-      resultText = 'PASS';
-    } else {
-      resultClass = 'result-fail';
-      resultText = 'FAIL';
-    }
+    if (r.status === 'NO_PROXY') { resultClass = 'result-skip'; resultText = 'NO PROXY'; }
+    else if (r.pass) { resultClass = 'result-pass'; resultText = 'PASS'; }
+    else { resultClass = 'result-fail'; resultText = 'FAIL'; }
 
     const tr = document.createElement('tr');
     tr.className = 'border-b border-[var(--border)] hover:bg-[var(--accents-1)]';
@@ -292,11 +250,7 @@ function resetButtons() {
   byId('btn-run').disabled = false;
   byId('btn-run').classList.remove('opacity-50');
   byId('btn-cancel').classList.add('hidden');
-  currentTaskId = null;
+  abortController = null;
 }
 
-/* ---------- Init ---------- */
-
-document.addEventListener('DOMContentLoaded', () => {
-  loadConfig();
-});
+document.addEventListener('DOMContentLoaded', () => { loadConfig(); });
