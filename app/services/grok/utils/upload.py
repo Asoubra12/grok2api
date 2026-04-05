@@ -20,6 +20,7 @@ from app.core.config import get_config
 from app.core.exceptions import AppException, UpstreamException, ValidationException
 from app.core.logger import logger
 from app.core.storage import DATA_DIR
+from app.services.grok.utils.blur_detect import is_blurry_blob
 from app.services.reverse.assets_upload import AssetsUploadReverse
 from app.services.grok.utils.locks import _get_upload_semaphore, _file_lock
 
@@ -365,6 +366,16 @@ class UploadService:
                     f"filename={filename}, mime={mime}, resolution={width}x{height}, "
                     f"pixels={width * height}, bytes={raw_size}, b64_len={len(b64)}"
                 )
+                blurry, variance = is_blurry_blob(b64)
+                if blurry:
+                    raise ValidationException(
+                        message=(
+                            f"Image is too blurry to upload (Laplacian variance={variance:.2f}). "
+                            "Please use a sharper image."
+                        ),
+                        param="image",
+                        code="image_too_blurry",
+                    )
 
             session = await self.create()
             try:

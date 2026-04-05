@@ -1,0 +1,38 @@
+.card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.geist-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--fg);
+  font-size: 14px;
+  transition: border-color 0.15s;
+}
+.geist-input:focus {
+  outline: none;
+  border-color: var(--fg);
+}
+
+.feed-line {
+  padding: 2px 0;
+  color: var(--accents-5);
+}
+.feed-line.pass { color: var(--success, #0070f3); }
+.feed-line.fail { color: var(--error, #e00); }
+
+.result-pass {
+  color: #22c55e;
+  font-weight: 600;
+}
+.result-fail {
+  color: #ef4444;
+  font-weight: 600;
+}
+.result-skip {
+  color: var(--accents-4);
+}

@@ -128,6 +128,10 @@ nsfw = true
 medium_min_bytes = 30000
 # 判定为最终图的最小字节数
 final_min_bytes = 100000
+# Laplacian 模糊检测阈值（方差低于此值视为模糊），0 = 禁用
+blur_threshold = 0
+# 模糊检测日志（启用后即使不拒绝也会记录方差值）
+blur_log = true
 
 # ==================== 视频配置 ====================
 [video]
@@ -191,3 +195,20 @@ concurrent = 100
 batch_size = 50
 # Usage 请求超时时间（秒）
 timeout = 60
+
+# ==================== Geo 审查测试 ====================
+[geo_test]
+# 代理 API 密钥（ipoasis）
+proxy_api_key = ""
+# 代理 sub-user ID
+proxy_sub_user_id = 0
+# 测试 prompt
+prompt = ""
+# 每个国家生成图片数
+images_per_country = 4
+# 通过阈值（至少几张通过算该国通过）
+pass_threshold = 2
+# 正常图片最小字节数
+min_normal_size = 50000
+# 国家列表
+countries = ["us","pe","pa","bo","la","br","ar","mx","co","cl","jp","kr","th","vn","in","gb","de","fr","it","es","nl","se","no","au","nz","ca","id","my","tr","ru","sa","ae","qa","ph","sg","za","ng","ke","eg","il"]

@@ -18,6 +18,7 @@ from app.core.config import get_config
 from app.core.logger import logger
 from app.core.storage import DATA_DIR
 from app.core.exceptions import AppException, ErrorType, UpstreamException
+from app.services.grok.utils.blur_detect import is_blurry_blob
 from app.services.grok.utils.process import BaseProcessor
 from app.services.grok.utils.retry import pick_token, rate_limited
 from app.services.grok.utils.stream import wrap_stream_with_usage
@@ -641,10 +642,24 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
             ]
 
         for image_id, item in selected:
+            blob = item.get("blob", "")
+
+            # Only blur-check confirmed final images.  Medium/preview
+            # fallbacks (when final timed out) must pass through so the
+            # caller still gets *something* rather than an empty response.
+            if item.get("is_final"):
+                blurry, variance = is_blurry_blob(blob)
+                if blurry:
+                    logger.warning(
+                        f"Stream final image skipped (blurry): "
+                        f"image_id={image_id}, variance={variance:.2f}"
+                    )
+                    continue
+
             if self.response_format == "url":
                 output = await self._save_blob(
                     f"{image_id}-final",
-                    item.get("blob", ""),
+                    blob,
                     item.get("is_final", False),
                     ext=item.get("ext"),
                 )
@@ -714,6 +729,20 @@ class ImageWSCollectProcessor(ImageWSBaseProcessor):
         share_items: List[tuple[str, str]] = []
         for item in selected:
             image_id = str(item.get("image_id", "") or "").strip()
+
+            # Only blur-check confirmed final images.  Medium/preview
+            # fallbacks (when the final timed out) are lower quality by
+            # nature and must not be filtered — they are the best the
+            # upstream could deliver.
+            if item.get("is_final"):
+                blurry, variance = is_blurry_blob(item.get("blob", ""))
+                if blurry:
+                    logger.warning(
+                        f"Collect final image skipped (blurry): "
+                        f"image_id={image_id}, variance={variance:.2f}"
+                    )
+                    continue
+
             output = await self._to_output(image_id, item)
             if output:
                 results.append(output)

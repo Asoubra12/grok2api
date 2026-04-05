@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=overlays-content">
+  <title>Grok2API - Geo Moderation Test</title>
+  <link rel="icon" href="/static/common/img/favicon/favicon.ico">
+  <script src="/static/vendor/tailwind/tailwindcss-cdn.js"></script>
+  <link href="/static/vendor/geist/geist-sans.css" rel="stylesheet">
+  <link href="/static/vendor/geist/geist-mono.css" rel="stylesheet">
+  <script src="/static/common/js/theme.js?v=0.1.0"></script>
+  <link href="/static/common/css/common.css?v=0.3.7" rel="stylesheet">
+  <link href="/static/admin/css/geo_test.css?v=0.1.0" rel="stylesheet">
+  <link href="/static/common/css/toast.css" rel="stylesheet">
+</head>
+
+<body class="min-h-screen flex flex-col" style="background-color: var(--bg);">
+
+  <div id="toast-container" class="toast-container"></div>
+  <div id="app-header"></div>
+
+  <main class="space-y-6 flex-1 container mx-auto max-w-5xl px-4 sm:px-6 py-6 sm:py-8 fade-in">
+    <div class="space-y-6">
+
+      <!-- Title -->
+      <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 class="text-2xl font-semibold tracking-tight">Geo Moderation Test</h2>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">Test image generation across proxy countries to detect geo-moderation.</p>
+        </div>
+        <div class="flex w-full flex-wrap items-center gap-2 md:w-auto md:gap-3">
+          <button id="btn-run" onclick="startTest()" class="geist-button gap-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            Run Test
+          </button>
+          <button id="btn-cancel" onclick="cancelTest()" class="geist-button-outline gap-2 hidden">
+            Cancel
+          </button>
+        </div>
+      </div>
+
+      <!-- Config Panel -->
+      <div class="card p-5 space-y-4">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-[var(--accents-4)]">Configuration</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs text-[var(--accents-5)] mb-1">Proxy API Key</label>
+            <input id="cfg-proxy-api-key" type="password" class="geist-input w-full" placeholder="ipoasis API key">
+          </div>
+          <div>
+            <label class="block text-xs text-[var(--accents-5)] mb-1">Proxy Sub-User ID</label>
+            <input id="cfg-proxy-sub-user-id" type="number" class="geist-input w-full" placeholder="e.g. 1647">
+          </div>
+          <div class="md:col-span-2">
+            <label class="block text-xs text-[var(--accents-5)] mb-1">Prompt</label>
+            <input id="cfg-prompt" type="text" class="geist-input w-full" placeholder="Image generation prompt to test">
+          </div>
+          <div>
+            <label class="block text-xs text-[var(--accents-5)] mb-1">Images per Country</label>
+            <input id="cfg-images-per-country" type="number" class="geist-input w-full" value="4" min="1" max="20">
+          </div>
+          <div>
+            <label class="block text-xs text-[var(--accents-5)] mb-1">Pass Threshold (min passing images)</label>
+            <input id="cfg-pass-threshold" type="number" class="geist-input w-full" value="2" min="1" max="20">
+          </div>
+          <div class="md:col-span-2">
+            <label class="block text-xs text-[var(--accents-5)] mb-1">Countries (comma-separated)</label>
+            <input id="cfg-countries" type="text" class="geist-input w-full" placeholder="us,gb,de,jp,...">
+          </div>
+        </div>
+        <div class="flex justify-end">
+          <button onclick="saveConfig()" class="geist-button-outline text-sm">Save Config</button>
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div id="progress-panel" class="card p-5 space-y-3 hidden">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-[var(--accents-4)]">Progress</h3>
+        <div class="w-full bg-[var(--accents-2)] rounded-full h-2">
+          <div id="progress-bar" class="h-2 rounded-full transition-all duration-300" style="width: 0%; background: var(--success);"></div>
+        </div>
+        <div class="flex gap-4 text-sm text-[var(--accents-5)]">
+          <span>Tested: <strong id="progress-processed">0</strong>/<strong id="progress-total">0</strong></span>
+          <span>Passed: <strong id="progress-ok" class="text-green-500">0</strong></span>
+          <span>Failed: <strong id="progress-fail" class="text-red-500">0</strong></span>
+        </div>
+        <!-- Live feed -->
+        <div id="live-feed" class="space-y-1 max-h-48 overflow-y-auto text-xs font-mono"></div>
+      </div>
+
+      <!-- Summary -->
+      <div id="summary-panel" class="card p-5 space-y-3 hidden">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-[var(--accents-4)]">Summary</h3>
+        <div class="flex gap-6 text-sm">
+          <span>Countries: <strong id="sum-total">0</strong></span>
+          <span>Passed: <strong id="sum-passed" class="text-green-500">0</strong></span>
+          <span>Failed: <strong id="sum-failed" class="text-red-500">0</strong></span>
+          <span>Duration: <strong id="sum-duration">-</strong></span>
+        </div>
+      </div>
+
+      <!-- Results Table -->
+      <div id="results-panel" class="card hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-[var(--border)] text-left text-xs text-[var(--accents-4)] uppercase">
+                <th class="px-4 py-3">#</th>
+                <th class="px-4 py-3">Country</th>
+                <th class="px-4 py-3">Score</th>
+                <th class="px-4 py-3">Pass Images</th>
+                <th class="px-4 py-3">OK / Total</th>
+                <th class="px-4 py-3">Avg Size</th>
+                <th class="px-4 py-3">Result</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <div id="app-footer"></div>
+
+  <script src="/static/common/js/admin-auth.js?v=0.3.0"></script>
+  <script src="/static/common/js/toast.js?v=0.1.0"></script>
+  <script src="/static/common/js/header.js?v=0.3.0"></script>
+  <script src="/static/common/js/footer.js?v=0.1.0"></script>
+  <script src="/static/admin/js/geo_test.js?v=0.1.0"></script>
+</body>
+
+</html>
