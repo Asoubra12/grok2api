@@ -32,3 +32,8 @@ async def admin_cache():
 @router.get("/admin/token", include_in_schema=False)
 async def admin_token():
     return serve_embedded_asset(STATIC_DIR, "admin/pages/token.html", "text/html; charset=utf-8")
+
+
+@router.get("/admin/geo-test", include_in_schema=False)
+async def admin_geo_test():
+    return serve_embedded_asset(STATIC_DIR, "admin/pages/geo_test.html", "text/html; charset=utf-8")
