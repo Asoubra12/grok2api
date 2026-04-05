@@ -175,9 +175,36 @@ function handleEvent(event) {
 
   if (type === 'started') {
     byId('progress-total').textContent = event.total || 0;
+    addFeedLine(`Starting test: ${event.total} countries, ${event.images_per_country} images each`, '');
   }
 
-  if (type === 'progress') {
+  if (type === 'country_start') {
+    addFeedLine(`[${(event.country || '').toUpperCase()}] Getting proxy...`, '');
+  }
+
+  if (type === 'image_start') {
+    addFeedLine(`[${(event.country || '').toUpperCase()}] Generating image ${event.image}/${event.of}...`, '');
+  }
+
+  if (type === 'image_done') {
+    const cc = (event.country || '').toUpperCase();
+    if (event.status === 'ok') {
+      const v = event.verdict === 'PASS' ? 'pass' : 'fail';
+      addFeedLine(`[${cc}] Image ${event.image}/${event.of}: ${formatBytes(event.size)} ${event.width}x${event.height} [${event.verdict}]`, v);
+    } else {
+      addFeedLine(`[${cc}] Image ${event.image}/${event.of}: ${event.status} ${event.error || ''}`, 'fail');
+    }
+  }
+
+  if (type === 'country_done') {
+    const r = event.result || {};
+    const cc = (r.country || '').toUpperCase();
+    const isPass = r.pass;
+    const cls = r.status === 'NO_PROXY' ? 'skip' : (isPass ? 'pass' : 'fail');
+    const icon = r.status === 'NO_PROXY' ? 'SKIP' : (isPass ? 'PASS' : 'FAIL');
+    addFeedLine(`[${cc}] ${icon} — score=${r.score}, pass_images=${r.pass_count}/${r.total}, avg=${formatBytes(r.avg_size)}`, cls);
+    addFeedLine('', '');  // spacer
+
     const processed = event.processed || 0;
     const total = event.total || 1;
     byId('progress-bar').style.width = Math.round((processed / total) * 100) + '%';
@@ -185,24 +212,21 @@ function handleEvent(event) {
     byId('progress-total').textContent = total;
     byId('progress-ok').textContent = event.ok || 0;
     byId('progress-fail').textContent = event.fail || 0;
-
-    if (event.detail) {
-      const d = event.detail;
-      const cc = (d.country || '').toUpperCase();
-      const isPass = d.pass;
-      const cls = isPass ? 'pass' : (d.status === 'NO_PROXY' ? 'skip' : 'fail');
-      const icon = isPass ? 'PASS' : (d.status === 'NO_PROXY' ? 'SKIP' : 'FAIL');
-      const line = document.createElement('div');
-      line.className = `feed-line ${cls}`;
-      line.textContent = `[${cc}] ${icon} — score=${d.score}, pass_images=${d.pass_count}/${d.total}, avg=${formatBytes(d.avg_size)}`;
-      byId('live-feed').appendChild(line);
-      byId('live-feed').scrollTop = byId('live-feed').scrollHeight;
-    }
   }
 
   if (type === 'done') {
     renderResults(event.result);
   }
+}
+
+function addFeedLine(text, cls) {
+  const line = document.createElement('div');
+  line.className = `feed-line ${cls || ''}`;
+  line.textContent = text;
+  const feed = byId('live-feed');
+  feed.appendChild(line);
+  feed.scrollTop = feed.scrollHeight;
+}
 }
 
 function renderResults(result) {
