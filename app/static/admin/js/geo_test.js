@@ -227,7 +227,6 @@ function addFeedLine(text, cls) {
   feed.appendChild(line);
   feed.scrollTop = feed.scrollHeight;
 }
-}
 
 function renderResults(result) {
   if (!result) return;
